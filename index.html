@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>サイレントカメラ</title>
+<style>
+*, *::before, *::after {
+  margin: 0; padding: 0; box-sizing: border-box;
+}
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* ── Camera View ── */
+#app {
+  position: relative;
+  width: 100%; height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#videoContainer {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #111;
+}
+
+#video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+
+#video.mirror {
+  transform: scaleX(-1);
+}
+
+/* hidden canvas for capture */
+#captureCanvas { display: none; }
+
+/* ── Flash overlay ── */
+#flashOverlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.05s;
+  z-index: 50;
+}
+
+#flashOverlay.flash {
+  opacity: 0.7;
+}
+
+/* ── Focus ring ── */
+#focusRing {
+  position: absolute;
+  width: 70px; height: 70px;
+  border: 2px solid #ffd600;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(1.3);
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 40;
+}
+
+#focusRing.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ── Top bar ── */
+#topBar {
+  position: absolute;
+  top: 0;
+  left: 0; right: 0;
+  padding: calc(var(--safe-top) + 8px) 16px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 30;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+}
+
+.top-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 22px;
+  width: 44px; height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+.top-btn:active {
+  background: rgba(255,255,255,0.15);
+}
+
+.top-btn.flash-on {
+  color: #ffd600;
+}
+
+#silentBadge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 20px;
+}
+
+#zoomLabel {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: center;
+}
+
+/* ── Bottom controls ── */
+#bottomBar {
+  position: absolute;
+  bottom: 0;
+  left: 0; right: 0;
+  padding: 16px 20px calc(var(--safe-bottom) + 24px);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  z-index: 30;
+  background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+}
+
+/* Thumbnail */
+#thumbnailBtn {
+  width: 52px; height: 52px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+}
+
+#thumbnailBtn img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+
+/* Shutter */
+#shutterBtn {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.1s;
+}
+
+#shutterBtn::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: #fff;
+  transition: background 0.1s;
+}
+
+#shutterBtn:active {
+  transform: scale(0.92);
+}
+
+#shutterBtn:active::after {
+  background: #ccc;
+}
+
+/* Switch camera */
+#switchBtn {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+#switchBtn:active {
+  background: rgba(255,255,255,0.25);
+}
+
+/* ── Preview modal ── */
+#previewModal {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+}
+
+#previewModal.open {
+  display: flex;
+}
+
+#previewHeader {
+  display: flex;
+  justify-content: flex-end;
+  padding: calc(var(--safe-top) + 8px) 16px 8px;
+}
+
+#previewCloseBtn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 12px;
+}
+
+#previewImageContainer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#previewImage {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+#previewActions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 20px calc(var(--safe-bottom) + 24px);
+}
+
+.preview-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,0.15);
+  border: none;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 18px;
+  border-radius: 24px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.preview-action-btn:active {
+  background: rgba(255,255,255,0.3);
+}
+
+.preview-action-btn svg {
+  width: 18px; height: 18px;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── Toast ── */
+#toast {
+  position: fixed;
+  bottom: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(34,170,80,0.9);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  border-radius: 20px;
+  z-index: 200;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#toast.show {
+  opacity: 1;
+}
+
+/* ── Permission screen ── */
+#permissionScreen {
+  position: fixed;
+  inset: 0;
+  background: #111;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  text-align: center;
+  padding: 32px;
+}
+
+#permissionScreen h2 {
+  font-size: 20px;
+  margin-bottom: 12px;
+}
+
+#permissionScreen p {
+  font-size: 14px;
+  color: rgba(255,255,255,0.6);
+  margin-bottom: 24px;
+  line-height: 1.6;
+}
+
+#permissionScreen button {
+  background: #0a84ff;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 12px 32px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+#permissionScreen.hidden {
+  display: none;
+}
+
+/* SVG icons inline */
+.icon { display: inline-flex; }
+</style>
+</head>
+<body>
+
+<!-- Permission Screen -->
+<div id="permissionScreen">
+  <h2>📷 カメラへのアクセス</h2>
+  <p>サイレントカメラを使用するには<br>カメラへのアクセスを許可してください。</p>
+  <button id="permissionBtn">カメラを起動</button>
+</div>
+
+<!-- Main App -->
+<div id="app">
+  <div id="videoContainer">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="captureCanvas"></canvas>
+    <div id="flashOverlay"></div>
+    <div id="focusRing"></div>
+
+    <!-- Top Bar -->
+    <div id="topBar">
+      <button class="top-btn" id="flashBtn" title="フラッシュ">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23" id="flashSlash"/><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </button>
+      <div id="silentBadge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+        サイレント
+      </div>
+      <span id="zoomLabel"></span>
+    </div>
+  </div>
+
+  <!-- Bottom Bar -->
+  <div id="bottomBar">
+    <button id="thumbnailBtn" title="プレビュー"></button>
+    <button id="shutterBtn" title="撮影"></button>
+    <button id="switchBtn" title="カメラ切替">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2h-3l-2-2H11L9 5H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2z"/><circle cx="12" cy="11" r="3"/><polyline points="1 20 4 17 7 20"/><polyline points="17 20 20 17 23 20"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Preview Modal -->
+<div id="previewModal">
+  <div id="previewHeader">
+    <button id="previewCloseBtn">閉じる</button>
+  </div>
+  <div id="previewImageContainer">
+    <img id="previewImage" alt="撮影した写真">
+  </div>
+  <div id="previewActions">
+    <button class="preview-action-btn" id="downloadBtn">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      保存
+    </button>
+    <button class="preview-action-btn" id="copyBtn">
+      <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      コピー
+    </button>
+    <button class="preview-action-btn" id="shareBtn">
+      <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      共有
+    </button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── State ──
+  let stream = null;
+  let currentFacing = 'environment'; // 'environment' | 'user'
+  let flashOn = false;
+  let zoomLevel = 1;
+  let minZoom = 1;
+  let maxZoom = 10;
+  let lastCaptureDataUrl = null;
+  let lastCaptureBlob = null;
+
+  // ── DOM ──
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('captureCanvas');
+  const ctx = canvas.getContext('2d');
+  const flashOverlay = document.getElementById('flashOverlay');
+  const focusRing = document.getElementById('focusRing');
+  const flashBtn = document.getElementById('flashBtn');
+  const flashSlash = document.getElementById('flashSlash');
+  const zoomLabel = document.getElementById('zoomLabel');
+  const shutterBtn = document.getElementById('shutterBtn');
+  const switchBtn = document.getElementById('switchBtn');
+  const thumbnailBtn = document.getElementById('thumbnailBtn');
+  const previewModal = document.getElementById('previewModal');
+  const previewImage = document.getElementById('previewImage');
+  const previewCloseBtn = document.getElementById('previewCloseBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const copyBtn = document.getElementById('copyBtn');
+  const shareBtn = document.getElementById('shareBtn');
+  const toast = document.getElementById('toast');
+  const permissionScreen = document.getElementById('permissionScreen');
+  const permissionBtn = document.getElementById('permissionBtn');
+  const videoContainer = document.getElementById('videoContainer');
+
+  // ── Permission ──
+  permissionBtn.addEventListener('click', async () => {
+    await startCamera();
+  });
+
+  // ── Camera Start ──
+  async function startCamera() {
+    try {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+
+      const constraints = {
+        video: {
+          facingMode: currentFacing,
+          width: { ideal: 3840 },
+          height: { ideal: 2160 },
+        },
+        audio: false
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+
+      permissionScreen.classList.add('hidden');
+
+      // Mirror front camera
+      if (currentFacing === 'user') {
+        video.classList.add('mirror');
+      } else {
+        video.classList.remove('mirror');
+      }
+
+      // Reset zoom
+      zoomLevel = 1;
+      applyZoom();
+      updateFlashUI();
+
+    } catch (err) {
+      console.error('Camera error:', err);
+      if (err.name === 'NotAllowedError') {
+        alert('カメラへのアクセスが拒否されました。\nブラウザの設定からカメラの許可を有効にしてください。');
+      } else if (err.name === 'NotFoundError') {
+        alert('カメラが見つかりません。');
+      } else {
+        alert('カメラの起動に失敗しました: ' + err.message);
+      }
+    }
+  }
+
+  // ── Flash / Torch ──
+  function toggleFlash() {
+    flashOn = !flashOn;
+    applyTorch();
+    updateFlashUI();
+  }
+
+  function applyTorch() {
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (track && track.getCapabilities && track.getCapabilities().torch) {
+      track.applyConstraints({ advanced: [{ torch: flashOn }] }).catch(() => {});
+    }
+  }
+
+  function updateFlashUI() {
+    if (flashOn) {
+      flashBtn.classList.add('flash-on');
+      flashSlash.style.display = 'none';
+    } else {
+      flashBtn.classList.remove('flash-on');
+      flashSlash.style.display = '';
+    }
+  }
+
+  flashBtn.addEventListener('click', toggleFlash);
+
+  // ── Zoom ──
+  function applyZoom() {
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (track && track.getCapabilities) {
+      const caps = track.getCapabilities();
+      if (caps.zoom) {
+        minZoom = caps.zoom.min || 1;
+        maxZoom = caps.zoom.max || 10;
+        const clamped = Math.min(Math.max(zoomLevel, minZoom), maxZoom);
+        zoomLevel = clamped;
+        track.applyConstraints({ advanced: [{ zoom: clamped }] }).catch(() => {});
+      }
+    }
+    updateZoomLabel();
+  }
+
+  function updateZoomLabel() {
+    if (zoomLevel > 1.05) {
+      zoomLabel.textContent = zoomLevel.toFixed(1) + 'x';
+    } else {
+      zoomLabel.textContent = '';
+    }
+  }
+
+  // Pinch zoom
+  let pinchStartDist = 0;
+  let pinchStartZoom = 1;
+
+  videoContainer.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      pinchStartDist = getTouchDist(e.touches);
+      pinchStartZoom = zoomLevel;
+    }
+  }, { passive: true });
+
+  videoContainer.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2) {
+      const dist = getTouchDist(e.touches);
+      const scale = dist / pinchStartDist;
+      zoomLevel = pinchStartZoom * scale;
+      applyZoom();
+    }
+  }, { passive: true });
+
+  function getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  // Mouse wheel zoom (desktop)
+  videoContainer.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomLevel += e.deltaY > 0 ? -0.2 : 0.2;
+    zoomLevel = Math.max(1, zoomLevel);
+    applyZoom();
+  }, { passive: false });
+
+  // ── Tap to focus ──
+  videoContainer.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+
+    const rect = videoContainer.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Show focus ring
+    focusRing.style.left = x + 'px';
+    focusRing.style.top = y + 'px';
+    focusRing.classList.add('show');
+    setTimeout(() => focusRing.classList.remove('show'), 800);
+
+    // Apply focus point if supported
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (track && track.getCapabilities) {
+      const caps = track.getCapabilities();
+      if (caps.focusMode && caps.focusMode.includes('manual')) {
+        const px = x / rect.width;
+        const py = y / rect.height;
+        track.applyConstraints({
+          advanced: [{
+            focusMode: 'manual',
+            pointsOfInterest: [{ x: px, y: py }]
+          }]
+        }).catch(() => {});
+        // Reset to continuous after 3 seconds
+        setTimeout(() => {
+          track.applyConstraints({
+            advanced: [{ focusMode: 'continuous' }]
+          }).catch(() => {});
+        }, 3000);
+      }
+    }
+  });
+
+  // ── Capture (silent - uses canvas, no shutter sound) ──
+  async function capturePhoto() {
+    if (!stream || !video.videoWidth) return;
+
+    // Visual feedback flash
+    flashOverlay.classList.add('flash');
+    setTimeout(() => flashOverlay.classList.remove('flash'), 120);
+
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
+
+    // Mirror front camera capture
+    if (currentFacing === 'user') {
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    }
+
+    ctx.drawImage(video, 0, 0, w, h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    // Get data
+    lastCaptureDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+
+    canvas.toBlob((blob) => {
+      lastCaptureBlob = blob;
+    }, 'image/jpeg', 0.95);
+
+    // Update thumbnail
+    thumbnailBtn.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = lastCaptureDataUrl;
+    thumbnailBtn.appendChild(img);
+
+    showToast('撮影しました');
+  }
+
+  shutterBtn.addEventListener('click', capturePhoto);
+
+  // Keyboard shortcut: space to capture
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !previewModal.classList.contains('open')) {
+      e.preventDefault();
+      capturePhoto();
+    }
+  });
+
+  // ── Switch Camera ──
+  async function switchCamera() {
+    currentFacing = currentFacing === 'environment' ? 'user' : 'environment';
+    flashOn = false;
+    await startCamera();
+  }
+
+  switchBtn.addEventListener('click', switchCamera);
+
+  // ── Thumbnail / Preview ──
+  thumbnailBtn.addEventListener('click', () => {
+    if (!lastCaptureDataUrl) return;
+    previewImage.src = lastCaptureDataUrl;
+    previewModal.classList.add('open');
+  });
+
+  previewCloseBtn.addEventListener('click', () => {
+    previewModal.classList.remove('open');
+  });
+
+  // ── Download ──
+  downloadBtn.addEventListener('click', () => {
+    if (!lastCaptureDataUrl) return;
+    const a = document.createElement('a');
+    a.href = lastCaptureDataUrl;
+    const now = new Date();
+    const ts = now.getFullYear().toString() +
+      (now.getMonth()+1).toString().padStart(2,'0') +
+      now.getDate().toString().padStart(2,'0') + '_' +
+      now.getHours().toString().padStart(2,'0') +
+      now.getMinutes().toString().padStart(2,'0') +
+      now.getSeconds().toString().padStart(2,'0');
+    a.download = 'silent_photo_' + ts + '.jpg';
+    a.click();
+    showToast('保存しました');
+  });
+
+  // ── Copy to clipboard ──
+  copyBtn.addEventListener('click', async () => {
+    if (!lastCaptureBlob) {
+      // Fallback: re-generate blob
+      const resp = await fetch(lastCaptureDataUrl);
+      lastCaptureBlob = await resp.blob();
+    }
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': canvasToPngBlob() })
+      ]);
+      showToast('コピーしました');
+    } catch (err) {
+      // Fallback for browsers that don't support ClipboardItem
+      showToast('コピーに失敗しました');
+    }
+  });
+
+  function canvasToPngBlob() {
+    return new Promise(resolve => {
+      canvas.toBlob(blob => resolve(blob), 'image/png');
+    });
+  }
+
+  // ── Share ──
+  shareBtn.addEventListener('click', async () => {
+    if (!navigator.share || !lastCaptureBlob) {
+      // Fallback: just download
+      downloadBtn.click();
+      return;
+    }
+    try {
+      const file = new File([lastCaptureBlob], 'photo.jpg', { type: 'image/jpeg' });
+      await navigator.share({
+        files: [file],
+        title: 'サイレントカメラ',
+      });
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        showToast('共有に失敗しました');
+      }
+    }
+  });
+
+  // Hide share button if not supported
+  if (!navigator.share && !navigator.canShare) {
+    shareBtn.style.display = 'none';
+  }
+
+  // ── Toast ──
+  let toastTimer = null;
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 1500);
+  }
+
+  // ── Init ──
+  // Auto-start if permission was already granted
+  navigator.mediaDevices.enumerateDevices().then(devices => {
+    const hasCamera = devices.some(d => d.kind === 'videoinput' && d.label);
+    if (hasCamera) {
+      startCamera();
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
